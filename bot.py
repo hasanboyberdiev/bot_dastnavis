@@ -84,11 +84,10 @@ def init_user(chat_id):
             'content': None,
             'admin_state': None,
             'user_state': None, 
-            'humanize_level': 1, # Сатҳи бетартибии хат
+            'humanize_level': 1, 
             'temp_font_name': None
         }
     else:
-        # Агар шрифти корбар нест шуда бошад ва он AI-анализ набошад
         current_font = user_data[chat_id]['font_name']
         if "AI-Анализ" not in current_font and current_font not in FONTS and FONTS:
             user_data[chat_id]['font_name'] = first_font_name
@@ -222,7 +221,6 @@ def generate_handwritten_images(chat_id):
             continue
 
         words = line.split(' ')
-        # Истифодаи int() барои пешгирии хатогии non-integer
         current_x = left_margin + random.randint(int(-5 * hl), int(8 * hl)) 
         
         for word in words:
@@ -307,9 +305,13 @@ def handle_photo(message):
         
         if FONTS:
             ai_font = random.choice(list(FONTS.keys()))
-            ud['font_name'] = f"{ai_font} (AI-Анализ)"
             ud['font_file'] = FONTS[ai_font]
-            ud['humanize_level'] = random.uniform(1.5, 2.5) 
+        else:
+            ai_font = "Стандарт"
+            ud['font_file'] = ""
+            
+        ud['font_name'] = f"{ai_font} (AI-Анализ)"
+        ud['humanize_level'] = random.uniform(1.5, 2.5) 
         
         ud['user_state'] = None
         bot.edit_message_text("✅ **Таҳлил анҷом ёфт!**\nЗеҳни сунъӣ хати шуморо шинохт ва шрифту фосилаҳоро ба он мутобиқ кард.", chat_id, msg.message_id, parse_mode="Markdown")
