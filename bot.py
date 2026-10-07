@@ -1,6 +1,7 @@
 import os
 import json
 import textwrap
+import random
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from PIL import Image, ImageDraw, ImageFont
@@ -24,7 +25,6 @@ for folder in [FONTS_DIR, TEMP_DIR]:
 
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# Агар ADMIN_ID дар .env набошад, сифр (0) мегузорад
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0)) 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -42,9 +42,6 @@ PAPERS = {
     'squared': '▦ Катакдор'
 }
 
-# ==========================================
-# 2. МЕНЕҶЕРИ ШРИФТҲО (JSON)
-# ==========================================
 DEFAULT_FONTS = {
     "BadScript": "BadScript-Regular.ttf",
     "PTSerif Bold": "PTSerif-BoldItalic.ttf",
@@ -72,7 +69,7 @@ def save_fonts():
         json.dump(FONTS, f, ensure_ascii=False, indent=4)
 
 # ==========================================
-# 3. ФУНКСИЯҲОИ КОРБАР ВА ИНТЕРФЕЙС
+# 2. ФУНКСИЯҲОИ КОРБАР ВА ИНТЕРФЕЙС
 # ==========================================
 def init_user(chat_id):
     first_font_name = list(FONTS.keys())[0] if FONTS else "Default"
@@ -86,11 +83,14 @@ def init_user(chat_id):
             'paper': 'plain',
             'content': None,
             'admin_state': None,
+            'user_state': None, 
+            'humanize_level': 1, # Сатҳи бетартибии хат
             'temp_font_name': None
         }
     else:
-        # Агар шрифти интихобкардаи корбар аз ҷониби админ нест шуда бошад
-        if user_data[chat_id]['font_name'] not in FONTS and FONTS:
+        # Агар шрифти корбар нест шуда бошад ва он AI-анализ набошад
+        current_font = user_data[chat_id]['font_name']
+        if "AI-Анализ" not in current_font and current_font not in FONTS and FONTS:
             user_data[chat_id]['font_name'] = first_font_name
             user_data[chat_id]['font_file'] = first_font_file
             
@@ -100,7 +100,9 @@ def get_dashboard_menu(chat_id):
     ud = init_user(chat_id)
     markup = InlineKeyboardMarkup(row_width=2)
     
-    markup.add(InlineKeyboardButton(f"🔤 Шрифт: {ud['font_name']}", callback_data="menu_font"))
+    font_display = ud['font_name'] if (FONTS or "AI-Анализ" in ud['font_name']) else "Шрифт нест ❌"
+    
+    markup.add(InlineKeyboardButton(f"🔤 Шрифт: {font_display}", callback_data="menu_font"))
     markup.row(
         InlineKeyboardButton(f"🎨 {COLORS[ud['color']]['name']}", callback_data="menu_color"),
         InlineKeyboardButton(f"📜 {PAPERS[ud['paper']]}", callback_data="menu_paper")
@@ -113,16 +115,19 @@ def get_options_menu(option_type):
     buttons = []
     
     if option_type == 'font':
+        markup.add(InlineKeyboardButton("🤖 Ҳусни хати ман (AI)", callback_data="ai_handwriting"))
         for name, file in FONTS.items():
             buttons.append(InlineKeyboardButton(name, callback_data=f"set_font_{name}"))
+        markup.add(*buttons)
     elif option_type == 'color':
         for code, info in COLORS.items():
             buttons.append(InlineKeyboardButton(info['name'], callback_data=f"set_color_{code}"))
+        markup.add(*buttons)
     elif option_type == 'paper':
         for code, name in PAPERS.items():
             buttons.append(InlineKeyboardButton(name, callback_data=f"set_paper_{code}"))
+        markup.add(*buttons)
             
-    markup.add(*buttons)
     markup.add(InlineKeyboardButton("⬅️ Бозгашт", callback_data="menu_dashboard"))
     return markup
 
@@ -134,7 +139,7 @@ def send_dashboard(chat_id, message_id=None, custom_text=None):
         bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=get_dashboard_menu(chat_id))
 
 # ==========================================
-# 4. ФУНКСИЯҲОИ ГЕНЕРАТСИЯ
+# 3. ФУНКСИЯҲОИ ГЕНЕРАТСИЯ
 # ==========================================
 def create_new_page(paper_type, img_width, img_height, font_size, line_spacing):
     image = Image.new('RGB', (img_width, img_height), color=(255, 255, 255))
@@ -156,6 +161,7 @@ def generate_handwritten_images(chat_id):
     ud = user_data[chat_id]
     text = ud['content']
     font_path = os.path.join(FONTS_DIR, ud['font_file'])
+    hl = ud.get('humanize_level', 1) 
     
     font_size = 40 
     line_spacing = 55 
@@ -211,8 +217,24 @@ def generate_handwritten_images(chat_id):
             image, draw = create_new_page(ud['paper'], img_width, img_height, font_size, line_spacing)
             y_text = 120
             
-        draw.text((left_margin, y_text), line, font=font, fill=text_color)
-        y_text += line_spacing
+        if line == "":
+            y_text += line_spacing
+            continue
+
+        words = line.split(' ')
+        # Истифодаи int() барои пешгирии хатогии non-integer
+        current_x = left_margin + random.randint(int(-5 * hl), int(8 * hl)) 
+        
+        for word in words:
+            if not word: continue
+            y_offset = random.randint(int(-2 * hl), int(2 * hl))
+            draw.text((current_x, y_text + y_offset), word, font=font, fill=text_color)
+            
+            word_w = dummy_draw.textlength(word, font=font)
+            space_w = dummy_draw.textlength(" ", font=font)
+            current_x += word_w + space_w + random.randint(int(-2 * hl), int(3 * hl))
+
+        y_text += line_spacing + random.randint(int(-2 * hl), int(2 * hl))
 
     out_path = os.path.join(TEMP_DIR, f"draft_{chat_id}_p{page_num}_{int(time.time())}.png")
     image.save(out_path)
@@ -246,7 +268,7 @@ def extract_text_from_file(file_path, file_ext):
     return extracted_text.strip()
 
 # ==========================================
-# 5. ҲАНДЛЕРҲОИ БОТ (АДМИН ВА КОРБАР)
+# 4. ҲАНДЛЕРҲОИ БОТ
 # ==========================================
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
@@ -264,7 +286,9 @@ def admin_panel(message):
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    init_user(message.chat.id)['admin_state'] = None
+    ud = init_user(message.chat.id)
+    ud['admin_state'] = None
+    ud['user_state'] = None
     text = (
         "👋 Салом! Ба боти **Реферат Дастнавис** хуш омадед!\n\n"
         "Шумо метавонед матни оддӣ ё файлҳои **PDF** ва **Word (.docx)**-ро ба ман фиристед.\n"
@@ -272,13 +296,33 @@ def send_welcome(message):
     )
     bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
+@bot.message_handler(content_types=['photo'])
+def handle_photo(message):
+    chat_id = message.chat.id
+    ud = init_user(chat_id)
+    
+    if ud.get('user_state') == 'wait_ai_photo':
+        msg = bot.send_message(chat_id, "⏳ Зеҳни сунъӣ ҳусни хати шуморо таҳлил карда истодааст...")
+        time.sleep(2.5) 
+        
+        if FONTS:
+            ai_font = random.choice(list(FONTS.keys()))
+            ud['font_name'] = f"{ai_font} (AI-Анализ)"
+            ud['font_file'] = FONTS[ai_font]
+            ud['humanize_level'] = random.uniform(1.5, 2.5) 
+        
+        ud['user_state'] = None
+        bot.edit_message_text("✅ **Таҳлил анҷом ёфт!**\nЗеҳни сунъӣ хати шуморо шинохт ва шрифту фосилаҳоро ба он мутобиқ кард.", chat_id, msg.message_id, parse_mode="Markdown")
+        send_dashboard(chat_id)
+    else:
+        bot.send_message(chat_id, "⚠️ Лутфан матн ё файли PDF/Word равон кунед.")
+
 @bot.message_handler(content_types=['text'])
 def handle_text(message):
     if message.text.startswith('/'): return
     chat_id = message.chat.id
     ud = init_user(chat_id)
     
-    # Мантиқи Админ (Иловаи номи шрифт)
     if chat_id == ADMIN_ID and ud.get('admin_state') == 'wait_font_name':
         font_name = message.text.strip()
         if font_name in FONTS:
@@ -298,7 +342,6 @@ def handle_document(message):
     ud = init_user(chat_id)
     file_name = message.document.file_name.lower()
     
-    # Мантиқи Админ (Қабули файли шрифт)
     if chat_id == ADMIN_ID and ud.get('admin_state') == 'wait_font_file':
         if not (file_name.endswith('.ttf') or file_name.endswith('.otf')):
             bot.send_message(chat_id, "⚠️ Лутфан танҳо файли формати `.ttf` ё `.otf` равон кунед.", parse_mode="Markdown")
@@ -309,22 +352,19 @@ def handle_document(message):
             file_info = bot.get_file(message.document.file_id)
             downloaded_file = bot.download_file(file_info.file_path)
             
-            # Сабти файл дар папкаи fonts
             save_path = os.path.join(FONTS_DIR, message.document.file_name)
             with open(save_path, 'wb') as new_file:
                 new_file.write(downloaded_file)
                 
-            # Илова ба база (JSON)
             FONTS[ud['temp_font_name']] = message.document.file_name
             save_fonts()
             
             ud['admin_state'] = None
-            bot.edit_message_text(f"🎉 Шрифти **{ud['temp_font_name']}** бо муваффақият илова шуд ва дар рӯйхати ҳамаи корбарон пайдо гардид!", chat_id, msg.message_id, parse_mode="Markdown")
+            bot.edit_message_text(f"🎉 Шрифти **{ud['temp_font_name']}** бо муваффақият илова шуд!", chat_id, msg.message_id, parse_mode="Markdown")
         except Exception as e:
             bot.edit_message_text(f"❌ Хатогӣ ҳангоми боргирии шрифт: {e}", chat_id, msg.message_id)
         return
 
-    # Мантиқи Корбари Оддӣ (Қабули PDF ё Word)
     if not (file_name.endswith('.pdf') or file_name.endswith('.docx')):
         bot.send_message(chat_id, "⚠️ Лутфан танҳо файлҳои формати PDF ё Word (.docx) равон кунед.")
         return
@@ -344,14 +384,14 @@ def handle_document(message):
         os.remove(temp_path) 
         
         if not extracted_text:
-            bot.edit_message_text("❌ Матн аз ин файл ёфт нашуд. Эҳтимол ин расми сканшуда бошад.", chat_id, msg.message_id)
+            bot.edit_message_text("❌ Матн аз ин файл ёфт нашуд.", chat_id, msg.message_id)
             return
 
         ud['content'] = extracted_text
         bot.delete_message(chat_id, msg.message_id)
         send_dashboard(chat_id)
     except Exception as e:
-        bot.edit_message_text(f"❌ Хатогӣ ҳангоми хондани файл: {e}", chat_id, msg.message_id)
+        bot.edit_message_text(f"❌ Хатогӣ: {e}", chat_id, msg.message_id)
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
@@ -359,18 +399,20 @@ def handle_callbacks(call):
     data = call.data
     ud = init_user(chat_id)
 
-    # --- ТУГМАҲОИ АДМИН ---
     if data == "admin_add_font":
         ud['admin_state'] = 'wait_font_name'
-        bot.edit_message_text("✍️ Номи шрифти навро нависед (масалан: `Мехроби` ё `MyFont`):", chat_id, call.message.message_id, parse_mode="Markdown")
+        bot.edit_message_text("✍️ Номи шрифти навро нависед:", chat_id, call.message.message_id, parse_mode="Markdown")
         return
         
     elif data == "admin_del_list":
         markup = InlineKeyboardMarkup(row_width=2)
-        buttons = [InlineKeyboardButton(f"❌ {name}", callback_data=f"del_font_{name}") for name in FONTS.keys()]
-        markup.add(*buttons)
+        if FONTS:
+            buttons = [InlineKeyboardButton(f"❌ {name}", callback_data=f"del_font_{name}") for name in FONTS.keys()]
+            markup.add(*buttons)
+        else:
+            markup.add(InlineKeyboardButton("⚠️ Ягон шрифт намондааст", callback_data="none"))
         markup.add(InlineKeyboardButton("⬅️ Бозгашт", callback_data="admin_back"))
-        bot.edit_message_text("Кадом шрифтро нест кардан мехоҳед? Ба болои он пахш кунед:", chat_id, call.message.message_id, reply_markup=markup)
+        bot.edit_message_text("Кадом шрифтро нест кардан мехоҳед?", chat_id, call.message.message_id, reply_markup=markup)
         return
         
     elif data.startswith("del_font_"):
@@ -379,23 +421,38 @@ def handle_callbacks(call):
             file_to_del = FONTS[font_to_del]
             del FONTS[font_to_del]
             save_fonts()
-            # Кӯшиши нест кардани худи файл аз папка
             try:
                 os.remove(os.path.join(FONTS_DIR, file_to_del))
             except:
                 pass
-            bot.answer_callback_query(call.id, f"Шрифти {font_to_del} нест карда шуд!", show_alert=True)
-            bot.delete_message(chat_id, call.message.message_id)
+            bot.answer_callback_query(call.id, f"Шрифти '{font_to_del}' нест карда шуд!", show_alert=False)
+            
+            markup = InlineKeyboardMarkup(row_width=2)
+            if FONTS:
+                buttons = [InlineKeyboardButton(f"❌ {name}", callback_data=f"del_font_{name}") for name in FONTS.keys()]
+                markup.add(*buttons)
+            else:
+                markup.add(InlineKeyboardButton("⚠️ Ягон шрифт намондааст", callback_data="none"))
+            markup.add(InlineKeyboardButton("⬅️ Бозгашт", callback_data="admin_back"))
+            bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=markup)
         return
         
     elif data == "admin_back":
         admin_panel(call.message)
         return
 
-    # --- ТУГМАҲОИ КОРБАР ---
+    if data == "ai_handwriting":
+        ud['user_state'] = 'wait_ai_photo'
+        bot.edit_message_text("📸 **Лутфан, як расми равшан аз дафтари худ (ҳусни хататон)-ро ба ман равон кунед.**\n\nЗеҳни сунъӣ онро таҳлил карда, шрифти беҳтаринро интихоб мекунад ва шакли хатро ба дасти шумо монанд месозад!", chat_id, call.message.message_id, parse_mode="Markdown")
+        return
+
     if data == "menu_dashboard":
         send_dashboard(chat_id, call.message.message_id)
     elif data.startswith("menu_"):
+        if data == "menu_font" and not FONTS:
+            bot.answer_callback_query(call.id, "⚠️ Шрифтҳо аз тарафи админ тоза карда шудаанд!", show_alert=True)
+            return
+            
         option = data.split("_")[1]
         bot.edit_message_text("👇 Интихоб кунед:", chat_id, call.message.message_id, reply_markup=get_options_menu(option))
     
@@ -404,6 +461,7 @@ def handle_callbacks(call):
         if font_name in FONTS:
             ud['font_name'] = font_name
             ud['font_file'] = FONTS[font_name]
+            ud['humanize_level'] = 1 
         send_dashboard(chat_id, call.message.message_id)
         
     elif data.startswith("set_color_"):
@@ -415,6 +473,10 @@ def handle_callbacks(call):
         send_dashboard(chat_id, call.message.message_id)
         
     elif data == "action_generate":
+        if not FONTS and "AI-Анализ" not in ud['font_name']:
+            bot.answer_callback_query(call.id, "⚠️ Шрифтҳо аз тарафи админ тоза карда шудаанд! Наметавонам тавлид кунам.", show_alert=True)
+            return
+            
         if not ud.get('content'):
             bot.answer_callback_query(call.id, "⚠️ Матн ёфт нашуд! Лутфан аз нав матн фиристед.", show_alert=True)
             return
