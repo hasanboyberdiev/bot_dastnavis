@@ -3,7 +3,7 @@ import json
 import textwrap
 import random
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from PIL import Image, ImageDraw, ImageFont
 from fpdf import FPDF
 import PyPDF2
@@ -19,6 +19,7 @@ FONTS_DIR = os.path.join(BASE_DIR, "fonts")
 TEMP_DIR = os.path.join(BASE_DIR, "temp")
 FONTS_FILE = os.path.join(BASE_DIR, "fonts.json")
 ADMINS_FILE = os.path.join(BASE_DIR, "admins.json")
+CHANNELS_FILE = os.path.join(BASE_DIR, "channels.json")
 
 for folder in [FONTS_DIR, TEMP_DIR]:
     if not os.path.exists(folder):
@@ -45,123 +46,130 @@ PAPERS = {
     'squared': '▦ Катакдор'
 }
 
-# ==========================================
-# 2. МЕНЕҶЕРИ ШРИФТҲО ВА АДМИНҲО
-# ==========================================
-DEFAULT_FONTS = {}
+# МАТНИ ТУГМАҲО
+BTN_FONT = "🔤 Шрифт"
+BTN_COLOR = "🎨 Ранг"
+BTN_PAPER = "📔 Варақа"
+BTN_FORMAT = "💾 Формат (PDF/Расм)"
+BTN_GENERATE = "✅ ТАВЛИД КАРДАН"
+BTN_BACK = "🔙 Бозгашт"
+BTN_ADMIN_BACK = "🔙 Менюи Админ"
+BTN_MAIN_BACK = "🔙 Бозгашт (Асосӣ)"
 
-def load_fonts():
-    if os.path.exists(FONTS_FILE):
-        with open(FONTS_FILE, 'r', encoding='utf-8') as f:
+# ==========================================
+# 2. МЕНЕҶЕРИ ФАЙЛҲО
+# ==========================================
+def load_json(file_path, default_data):
+    if os.path.exists(file_path):
+        with open(file_path, 'r', encoding='utf-8') as f:
             return json.load(f)
     else:
-        with open(FONTS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(DEFAULT_FONTS, f, ensure_ascii=False, indent=4)
-        return DEFAULT_FONTS
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(default_data, f, ensure_ascii=False, indent=4)
+        return default_data
 
-def save_fonts():
-    with open(FONTS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(FONTS, f, ensure_ascii=False, indent=4)
+def save_json(file_path, data):
+    with open(file_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
 
-def load_admins():
-    if os.path.exists(ADMINS_FILE):
-        with open(ADMINS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    else:
-        with open(ADMINS_FILE, 'w', encoding='utf-8') as f:
-            json.dump([], f, ensure_ascii=False, indent=4)
-        return []
-
-def save_admins():
-    with open(ADMINS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(SUB_ADMINS, f, ensure_ascii=False, indent=4)
-
-FONTS = load_fonts()
-SUB_ADMINS = load_admins()
+FONTS = load_json(FONTS_FILE, {})
+SUB_ADMINS = load_json(ADMINS_FILE, [])
+CHANNELS = load_json(CHANNELS_FILE, {}) 
 
 # ==========================================
-# 3. ФУНКСИЯҲОИ КОРБАР ВА ИНТЕРФЕЙСИ НАВ (InlineKeyboardMarkup)
+# 3. СИСТЕМАИ ОБУНАИ МАҶБУРӢ
+# ==========================================
+def get_unsubscribed_channels(user_id):
+    unsubbed = {}
+    for ch_id, link in CHANNELS.items():
+        try:
+            member = bot.get_chat_member(ch_id, user_id)
+            if member.status in ['left', 'kicked']:
+                unsubbed[ch_id] = link
+        except Exception:
+            pass 
+    return unsubbed
+
+def enforce_subscription(chat_id):
+    if chat_id == ADMIN_ID or chat_id in SUB_ADMINS:
+        return True 
+    
+    unsubbed = get_unsubscribed_channels(chat_id)
+    if unsubbed:
+        markup = InlineKeyboardMarkup()
+        for ch_id, link in unsubbed.items():
+            markup.add(InlineKeyboardButton("📢 Обуна шудан", url=link))
+        markup.add(InlineKeyboardButton("✅ Тафтиш кардан", callback_data="check_sub"))
+        
+        bot.send_message(
+            chat_id, 
+            "⚠️ **Барои истифодаи бот, лутфан ба каналҳои зерин обуна шавед:**", 
+            parse_mode="Markdown", 
+            reply_markup=markup
+        )
+        return False
+    return True
+
+@bot.callback_query_handler(func=lambda call: call.data == "check_sub")
+def handle_check_sub(call):
+    chat_id = call.message.chat.id
+    unsubbed = get_unsubscribed_channels(chat_id)
+    if unsubbed:
+        bot.answer_callback_query(call.id, "❌ Шумо то ҳол ба ҳамаи каналҳо обуна нашудаед!", show_alert=True)
+    else:
+        bot.answer_callback_query(call.id, "✅ Обуна тасдиқ шуд! Хуш омадед.", show_alert=True)
+        bot.delete_message(chat_id, call.message.message_id)
+        if chat_id in user_data and user_data[chat_id].get('content'):
+            send_dashboard(chat_id)
+        else:
+            bot.send_message(chat_id, "👇 *Лутфан акнун матн ё файли худро равон кунед:*", parse_mode="Markdown")
+
+# ==========================================
+# 4. ФУНКСИЯҲОИ КОРБАР ВА ГЕНЕРАТСИЯ
 # ==========================================
 def init_user(chat_id):
     first_font_name = list(FONTS.keys())[0] if FONTS else "Default"
     first_font_file = FONTS.get(first_font_name, "")
-    
     if chat_id not in user_data:
         user_data[chat_id] = {
             'font_name': first_font_name,
             'font_file': first_font_file,
-            'color': 'blue',
-            'paper': 'lined',
-            'format': 'pdf', 
-            'content': None,
-            'admin_state': None,
-            'temp_font_name': None
+            'color': 'blue', 'paper': 'lined', 'format': 'pdf', 
+            'content': None, 'admin_state': None, 'user_state': None, 'temp_data': None
         }
     else:
         if user_data[chat_id]['font_name'] not in FONTS and FONTS:
             user_data[chat_id]['font_name'] = first_font_name
             user_data[chat_id]['font_file'] = first_font_file
-            
     return user_data[chat_id]
 
-def get_dashboard_menu(chat_id):
+def send_dashboard(chat_id, custom_text=None):
     ud = init_user(chat_id)
-    markup = InlineKeyboardMarkup(row_width=2)
-    
+    if not ud.get('content'):
+        bot.send_message(chat_id, "👇 *Лутфан аввал матн ё файли худро равон кунед, сипас меню пайдо мешавад:*", parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
+        return
+
     font_display = ud['font_name'] if FONTS else "Шрифт нест ❌"
     format_display = "PDF 📄" if ud.get('format', 'pdf') == 'pdf' else "Расмҳо 🖼"
     
-    # Қатори 1: Шрифт (Калон)
-    markup.add(InlineKeyboardButton(f"🔤 Шрифт: {font_display}", callback_data="menu_font"))
-    
-    # Қатори 2: Ранг ва Варақа (Дар як сатр)
-    markup.row(
-        InlineKeyboardButton(f"🎨 Ранг: {COLORS[ud['color']]['name']}", callback_data="menu_color"),
-        InlineKeyboardButton(f"📔 Варақа: {PAPERS[ud['paper']]}", callback_data="menu_paper")
+    text = custom_text if custom_text else (
+        "⚙️ **Танзимоти Дастнависи шумо:**\n\n"
+        f"🔤 **Шрифт:** {font_display}\n"
+        f"🎨 **Ранг:** {COLORS[ud['color']]['name']}\n"
+        f"📔 **Варақа:** {PAPERS[ud['paper']]}\n"
+        f"💾 **Формат:** {format_display}\n\n"
+        "👇 *Агар омода бошед, 'ТАВЛИД КАРДАН'-ро пахш намоед:*"
     )
     
-    # Қатори 3: Формати натиҷа
-    markup.add(InlineKeyboardButton(f"💾 Формати натиҷа: {format_display}", callback_data="toggle_format"))
-    
-    # Қатори 4: Тугмаи Асосӣ
-    markup.add(InlineKeyboardButton("✅ ТАВЛИД КАРДАН", callback_data="action_generate"))
-    
-    return markup
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    markup.add(KeyboardButton(BTN_FONT), KeyboardButton(BTN_COLOR))
+    markup.add(KeyboardButton(BTN_PAPER), KeyboardButton(BTN_FORMAT))
+    markup.add(KeyboardButton(BTN_GENERATE))
+    bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
 
-def get_options_menu(option_type):
-    markup = InlineKeyboardMarkup(row_width=2)
-    buttons = []
-    
-    if option_type == 'font':
-        for name, file in FONTS.items():
-            buttons.append(InlineKeyboardButton(name, callback_data=f"set_font_{name}"))
-        markup.add(*buttons)
-    elif option_type == 'color':
-        for code, info in COLORS.items():
-            buttons.append(InlineKeyboardButton(info['name'], callback_data=f"set_color_{code}"))
-        markup.add(*buttons)
-    elif option_type == 'paper':
-        for code, name in PAPERS.items():
-            buttons.append(InlineKeyboardButton(name, callback_data=f"set_paper_{code}"))
-        markup.add(*buttons)
-            
-    markup.add(InlineKeyboardButton("⬅️ Бозгашт ба Меню", callback_data="menu_dashboard"))
-    return markup
-
-def send_dashboard(chat_id, message_id=None, custom_text=None):
-    text = custom_text if custom_text else "⚙️ **Танзимоти Дастнависи шумо:**\nХусусиятҳоро тағйир диҳед ё тугмаи 'Тавлид кардан'-ро пахш кунед:"
-    if message_id:
-        bot.edit_message_text(text, chat_id, message_id, parse_mode="Markdown", reply_markup=get_dashboard_menu(chat_id))
-    else:
-        bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=get_dashboard_menu(chat_id))
-
-# ==========================================
-# 4. ФУНКСИЯҲОИ ГЕНЕРАТСИЯ
-# ==========================================
 def create_new_page(paper_type, img_width, img_height, font_size, line_spacing):
     image = Image.new('RGB', (img_width, img_height), color=(255, 255, 255))
     draw = ImageDraw.Draw(image)
-    
     if paper_type == 'lined':
         draw.line([(100, 0), (100, img_height)], fill=(255, 100, 100), width=2)
         for y in range(120 + font_size, img_height, line_spacing):
@@ -173,28 +181,21 @@ def create_new_page(paper_type, img_width, img_height, font_size, line_spacing):
             draw.line([(0, y), (img_width, y)], fill=(210, 230, 255), width=1)
         for x in range(0, img_width, grid_size):
             draw.line([(x, 0), (x, img_height)], fill=(210, 230, 255), width=1)
-            
     return image, draw
 
 def generate_handwritten_images(chat_id, progress_callback=None):
     ud = user_data[chat_id]
     text = ud['content']
     font_path = os.path.join(FONTS_DIR, ud['font_file'])
-    
-    font_size = 40 
-    line_spacing = 55 
-    
+    font_size, line_spacing = 40, 55 
     img_width, img_height = 1240, 1754 
-    left_margin = 130 
-    right_margin = 80
+    left_margin, right_margin = 130, 80
     max_text_width = img_width - left_margin - right_margin
     bottom_margin = 150 
     max_y = img_height - bottom_margin
     
-    try:
-        font = ImageFont.truetype(font_path, font_size)
-    except IOError:
-        font = ImageFont.load_default()
+    try: font = ImageFont.truetype(font_path, font_size)
+    except: font = ImageFont.load_default()
 
     dummy_img = Image.new('RGB', (1, 1))
     dummy_draw = ImageDraw.Draw(dummy_img)
@@ -204,24 +205,19 @@ def generate_handwritten_images(chat_id, progress_callback=None):
         if not paragraph.strip():
             lines.append("") 
             continue
-        words = paragraph.split(' ')
         current_line = ""
-        for word in words:
+        for word in paragraph.split(' '):
             test_line = current_line + word + " "
             w = dummy_draw.textlength(test_line, font=font)
-            if w <= max_text_width:
-                current_line = test_line
+            if w <= max_text_width: current_line = test_line
             else:
-                if current_line:
-                    lines.append(current_line)
+                if current_line: lines.append(current_line)
                 current_line = word + " "
-        if current_line:
-            lines.append(current_line)
+        if current_line: lines.append(current_line)
 
     text_color = COLORS[ud['color']]['rgb']
     image_paths = []
     page_num = 1
-    
     image, draw = create_new_page(ud['paper'], img_width, img_height, font_size, line_spacing)
     y_text = 120
     
@@ -230,10 +226,7 @@ def generate_handwritten_images(chat_id, progress_callback=None):
             out_path = os.path.join(TEMP_DIR, f"draft_{chat_id}_p{page_num}_{int(time.time())}.png")
             image.save(out_path)
             image_paths.append(out_path)
-            
-            if progress_callback:
-                progress_callback(page_num)
-                
+            if progress_callback: progress_callback(page_num)
             page_num += 1
             image, draw = create_new_page(ud['paper'], img_width, img_height, font_size, line_spacing)
             y_text = 120
@@ -242,27 +235,18 @@ def generate_handwritten_images(chat_id, progress_callback=None):
             y_text += line_spacing
             continue
 
-        words = line.split(' ')
         current_x = left_margin + random.randint(-5, 8) 
-        
-        for word in words:
+        for word in line.split(' '):
             if not word: continue
             y_offset = random.randint(-2, 2)
             draw.text((current_x, y_text + y_offset), word, font=font, fill=text_color)
-            
-            word_w = dummy_draw.textlength(word, font=font)
-            space_w = dummy_draw.textlength(" ", font=font)
-            current_x += word_w + space_w + random.randint(-2, 4)
-
+            current_x += dummy_draw.textlength(word, font=font) + dummy_draw.textlength(" ", font=font) + random.randint(-2, 4)
         y_text += line_spacing + random.randint(-3, 3)
 
     out_path = os.path.join(TEMP_DIR, f"draft_{chat_id}_p{page_num}_{int(time.time())}.png")
     image.save(out_path)
     image_paths.append(out_path)
-    
-    if progress_callback:
-        progress_callback(page_num)
-        
+    if progress_callback: progress_callback(page_num)
     return image_paths
 
 def create_pdf_from_images(image_paths, chat_id):
@@ -286,276 +270,299 @@ def extract_text_from_file(file_path, file_ext):
             doc = docx.Document(file_path)
             for para in doc.paragraphs:
                 extracted_text += para.text + "\n"
-    except Exception as e:
-        pass
+    except Exception: pass
     return extracted_text.strip()
+
+def send_admin_menu(chat_id):
+    ud = init_user(chat_id)
+    ud['admin_state'] = None
+    markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
+    markup.add(KeyboardButton("🔤 Кор бо шрифтҳо"))
+    if chat_id == ADMIN_ID:
+        markup.add(KeyboardButton("👥 Идоракунии админҳо"))
+        markup.add(KeyboardButton("📢 Обунаи маҷбурӣ"))
+    markup.add(KeyboardButton(BTN_MAIN_BACK))
+    bot.send_message(chat_id, "🛠 **Панели Асосии Админ**", parse_mode="Markdown", reply_markup=markup)
 
 # ==========================================
 # 5. ҲАНДЛЕРҲОИ БОТ
 # ==========================================
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    if not enforce_subscription(message.chat.id): return
+    ud = init_user(message.chat.id)
+    ud['admin_state'], ud['user_state'], ud['content'] = None, None, None
+    text = (
+        "👋 Салом! Ба боти **Реферат Дастнавис** хуш омадед!\n\n"
+        "Шумо метавонед матни оддӣ ё файлҳои **PDF** ва **Word (.docx)**-ро ба ман фиристед.\n"
+        "👇 *Лутфан аввал матн ё файли худро равон кунед:*"
+    )
+    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
+
 @bot.message_handler(commands=['admin'])
-def admin_panel(message):
+def admin_panel_cmd(message):
     chat_id = message.chat.id
     if chat_id != ADMIN_ID and chat_id not in SUB_ADMINS:
         bot.send_message(chat_id, "⛔️ Шумо ба ин бахш дастрасӣ надоред.")
         return
-        
-    init_user(chat_id)['admin_state'] = None
-    markup = InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        InlineKeyboardButton("➕ Илова кардани Шрифт", callback_data="admin_add_font"),
-        InlineKeyboardButton("➖ Нест кардани Шрифт", callback_data="admin_del_list")
-    )
-    
-    if chat_id == ADMIN_ID:
-        markup.add(InlineKeyboardButton("👥 Идоракунии Админҳо", callback_data="admin_manage_admins"))
-        
-    bot.send_message(chat_id, "🛠 **Панели Админ**\nЛутфан амалро интихоб кунед:", parse_mode="Markdown", reply_markup=markup)
-
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    ud = init_user(message.chat.id)
-    ud['admin_state'] = None
-    text = (
-        "👋 Салом! Ба боти **Реферат Дастнавис** хуш омадед!\n\n"
-        "Шумо метавонед матни оддӣ ё файлҳои **PDF** ва **Word (.docx)**-ро ба ман фиристед.\n"
-        "👇 *Ҳоло ягон матн ё файл равон кунед:*"
-    )
-    bot.send_message(message.chat.id, text, parse_mode="Markdown")
-
-@bot.message_handler(content_types=['text'])
-def handle_text(message):
-    if message.text.startswith('/'): return
-    chat_id = message.chat.id
-    ud = init_user(chat_id)
-    
-    if ud.get('admin_state') == 'wait_font_name' and (chat_id == ADMIN_ID or chat_id in SUB_ADMINS):
-        font_name = message.text.strip()
-        if font_name in FONTS:
-            bot.send_message(chat_id, "⚠️ Ин ном аллакай вуҷуд дорад. Номи дигар нависед:")
-            return
-        ud['temp_font_name'] = font_name
-        ud['admin_state'] = 'wait_font_file'
-        bot.send_message(chat_id, f"✅ Ном қабул шуд: **{font_name}**\n\nАкнун файли шрифтро (формати `.ttf` ё `.otf`) ба ман равон кунед:", parse_mode="Markdown")
-        return
-
-    if ud.get('admin_state') == 'wait_admin_id' and chat_id == ADMIN_ID:
-        try:
-            new_admin_id = int(message.text.strip())
-            if new_admin_id not in SUB_ADMINS and new_admin_id != ADMIN_ID:
-                SUB_ADMINS.append(new_admin_id)
-                save_admins()
-                bot.send_message(chat_id, f"✅ Админи нав бо ID `{new_admin_id}` бо муваффақият илова шуд!", parse_mode="Markdown")
-            else:
-                bot.send_message(chat_id, "⚠️ Ин ID аллакай дар рӯйхати админҳо вуҷуд дорад.")
-        except ValueError:
-            bot.send_message(chat_id, "⚠️ Хатогӣ! Лутфан танҳо рақамҳои ID-ро нависед (масалан: 123456789).")
-        
-        ud['admin_state'] = None
-        return
-
-    ud['content'] = message.text
-    send_dashboard(chat_id)
+    send_admin_menu(chat_id)
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     chat_id = message.chat.id
+    if not enforce_subscription(chat_id): return
     ud = init_user(chat_id)
     file_name = message.document.file_name.lower()
     
     if ud.get('admin_state') == 'wait_font_file' and (chat_id == ADMIN_ID or chat_id in SUB_ADMINS):
         if not (file_name.endswith('.ttf') or file_name.endswith('.otf')):
-            bot.send_message(chat_id, "⚠️ Лутфан танҳо файли формати `.ttf` ё `.otf` равон кунед.", parse_mode="Markdown")
+            bot.send_message(chat_id, "⚠️ Лутфан танҳо файли `.ttf` ё `.otf` равон кунед.")
             return
-            
         msg = bot.send_message(chat_id, "⏳ Шрифт боргирӣ шуда истодааст...")
         try:
             file_info = bot.get_file(message.document.file_id)
             downloaded_file = bot.download_file(file_info.file_path)
-            
             save_path = os.path.join(FONTS_DIR, message.document.file_name)
-            with open(save_path, 'wb') as new_file:
-                new_file.write(downloaded_file)
-                
-            FONTS[ud['temp_font_name']] = message.document.file_name
-            save_fonts()
-            
-            ud['admin_state'] = None
-            bot.edit_message_text(f"🎉 Шрифти **{ud['temp_font_name']}** бо муваффақият илова шуд!", chat_id, msg.message_id, parse_mode="Markdown")
+            with open(save_path, 'wb') as new_file: new_file.write(downloaded_file)
+            FONTS[ud['temp_data']] = message.document.file_name
+            save_json(FONTS_FILE, FONTS)
+            bot.delete_message(chat_id, msg.message_id)
+            bot.send_message(chat_id, f"🎉 Шрифти **{ud['temp_data']}** илова шуд!")
+            send_admin_menu(chat_id)
         except Exception as e:
-            bot.edit_message_text(f"❌ Хатогӣ ҳангоми боргирии шрифт: {e}", chat_id, msg.message_id)
+            bot.edit_message_text(f"❌ Хатогӣ: {e}", chat_id, msg.message_id)
         return
 
     if not (file_name.endswith('.pdf') or file_name.endswith('.docx')):
-        bot.send_message(chat_id, "⚠️ Лутфан танҳо файлҳои формати PDF ё Word (.docx) равон кунед.")
+        bot.send_message(chat_id, "⚠️ Лутфан танҳо файлҳои PDF ё Word (.docx) равон кунед.")
         return
 
     msg = bot.send_message(chat_id, "⏳ Файл боргирӣ шуда истодааст...")
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
-        
         ext = '.pdf' if file_name.endswith('.pdf') else '.docx'
         temp_path = os.path.join(TEMP_DIR, f"input_{chat_id}{ext}")
-        
-        with open(temp_path, 'wb') as new_file:
-            new_file.write(downloaded_file)
-        
+        with open(temp_path, 'wb') as new_file: new_file.write(downloaded_file)
         extracted_text = extract_text_from_file(temp_path, ext)
         os.remove(temp_path) 
-        
         if not extracted_text:
             bot.edit_message_text("❌ Матн аз ин файл ёфт нашуд.", chat_id, msg.message_id)
             return
-
         ud['content'] = extracted_text
         bot.delete_message(chat_id, msg.message_id)
-        send_dashboard(chat_id)
+        send_dashboard(chat_id, "✅ Файл қабул шуд ва матн ҷудо карда шуд!\nАкнун танзимотро иваз кунед ё '✅ ТАВЛИД КАРДАН'-ро пахш намоед.")
     except Exception as e:
         bot.edit_message_text(f"❌ Хатогӣ: {e}", chat_id, msg.message_id)
 
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callbacks(call):
-    chat_id = call.message.chat.id
-    data = call.data
-    ud = init_user(chat_id)
-    msg_id = call.message.message_id
-
-    if data == "admin_add_font":
-        ud['admin_state'] = 'wait_font_name'
-        bot.edit_message_text("✍️ Номи шрифти навро нависед:", chat_id, msg_id, parse_mode="Markdown")
-        return
-        
-    elif data == "admin_del_list":
-        markup = InlineKeyboardMarkup(row_width=2)
-        if FONTS:
-            buttons = [InlineKeyboardButton(f"❌ {name}", callback_data=f"del_font_{name}") for name in FONTS.keys()]
-            markup.add(*buttons)
-        else:
-            markup.add(InlineKeyboardButton("⚠️ Ягон шрифт намондааст", callback_data="none"))
-        markup.add(InlineKeyboardButton("⬅️ Бозгашт", callback_data="admin_back"))
-        bot.edit_message_text("Кадом шрифтро нест кардан мехоҳед?", chat_id, msg_id, reply_markup=markup)
-        return
-        
-    elif data.startswith("del_font_"):
-        font_to_del = data.replace("del_font_", "")
-        if font_to_del in FONTS:
-            file_to_del = FONTS[font_to_del]
-            del FONTS[font_to_del]
-            save_fonts()
-            try:
-                os.remove(os.path.join(FONTS_DIR, file_to_del))
-            except:
-                pass
-            bot.answer_callback_query(call.id, f"Шрифти '{font_to_del}' нест карда шуд!", show_alert=False)
-            
-            markup = InlineKeyboardMarkup(row_width=2)
-            if FONTS:
-                buttons = [InlineKeyboardButton(f"❌ {name}", callback_data=f"del_font_{name}") for name in FONTS.keys()]
-                markup.add(*buttons)
-            else:
-                markup.add(InlineKeyboardButton("⚠️ Ягон шрифт намондааст", callback_data="none"))
-            markup.add(InlineKeyboardButton("⬅️ Бозгашт", callback_data="admin_back"))
-            bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=markup)
-        return
-        
-    elif data == "admin_manage_admins":
-        if chat_id != ADMIN_ID: return
-        markup = InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            InlineKeyboardButton("➕ Иловаи Админ", callback_data="admin_add_sub"),
-            InlineKeyboardButton("➖ Нест кардани Админ", callback_data="admin_del_sub_list"),
-            InlineKeyboardButton("⬅️ Бозгашт", callback_data="admin_back")
-        )
-        bot.edit_message_text("👥 **Идоракунии Админҳо**\nДар ин ҷо шумо метавонед админҳои навро илова кунед.", chat_id, msg_id, parse_mode="Markdown", reply_markup=markup)
-        return
-        
-    elif data == "admin_add_sub":
-        if chat_id != ADMIN_ID: return
-        ud['admin_state'] = 'wait_admin_id'
-        bot.edit_message_text("✍️ ID-и корбарро нависед, то ӯро админ таъин кунед:\n*(Шумо метавонед ID-ро аз ботҳои ба монанди @userinfobot гиред)*", chat_id, msg_id, parse_mode="Markdown")
-        return
-        
-    elif data == "admin_del_sub_list":
-        if chat_id != ADMIN_ID: return
-        markup = InlineKeyboardMarkup(row_width=1)
-        if SUB_ADMINS:
-            for sub_id in SUB_ADMINS:
-                markup.add(InlineKeyboardButton(f"❌ Нест кардан: {sub_id}", callback_data=f"del_sub_{sub_id}"))
-        else:
-            markup.add(InlineKeyboardButton("⚠️ Ягон админи дигар нест", callback_data="none"))
-        markup.add(InlineKeyboardButton("⬅️ Бозгашт", callback_data="admin_manage_admins"))
-        bot.edit_message_text("Кадом админро аз вазифа озод кардан мехоҳед?", chat_id, msg_id, reply_markup=markup)
-        return
-        
-    elif data.startswith("del_sub_"):
-        if chat_id != ADMIN_ID: return
-        sub_id = int(data.replace("del_sub_", ""))
-        if sub_id in SUB_ADMINS:
-            SUB_ADMINS.remove(sub_id)
-            save_admins()
-            bot.answer_callback_query(call.id, f"Админ {sub_id} нест карда шуд!", show_alert=False)
-            
-            markup = InlineKeyboardMarkup(row_width=1)
-            if SUB_ADMINS:
-                for s_id in SUB_ADMINS:
-                    markup.add(InlineKeyboardButton(f"❌ Нест кардан: {s_id}", callback_data=f"del_sub_{s_id}"))
-            else:
-                markup.add(InlineKeyboardButton("⚠️ Ягон админи дигар нест", callback_data="none"))
-            markup.add(InlineKeyboardButton("⬅️ Бозгашт", callback_data="admin_manage_admins"))
-            bot.edit_message_reply_markup(chat_id, msg_id, reply_markup=markup)
-        return
-
-    elif data == "admin_back":
-        admin_panel(call.message)
-        return
-
-    if data == "toggle_format":
-        ud['format'] = 'images' if ud.get('format', 'pdf') == 'pdf' else 'pdf'
-        send_dashboard(chat_id, msg_id)
-        return
-
-    if data == "menu_dashboard":
-        send_dashboard(chat_id, msg_id)
-    elif data.startswith("menu_"):
-        if data == "menu_font" and not FONTS:
-            bot.answer_callback_query(call.id, "⚠️ Шрифтҳо аз тарафи админ тоза карда шудаанд!", show_alert=True)
-            return
-            
-        option = data.split("_")[1]
-        bot.edit_message_text("👇 Интихоб кунед:", chat_id, msg_id, reply_markup=get_options_menu(option))
+@bot.message_handler(content_types=['text'])
+def handle_text(message):
+    if message.text.startswith('/'): return
+    chat_id = message.chat.id
+    if not enforce_subscription(chat_id): return
     
-    elif data.startswith("set_font_"):
-        font_name = data.replace("set_font_", "")
-        if font_name in FONTS:
-            ud['font_name'] = font_name
-            ud['font_file'] = FONTS[font_name]
-        send_dashboard(chat_id, msg_id)
+    text = message.text.strip()
+    ud = init_user(chat_id)
+    
+    # === НАВИГАТСИЯ ===
+    if text == BTN_MAIN_BACK:
+        ud['user_state'], ud['admin_state'] = None, None
+        send_dashboard(chat_id) if ud.get('content') else bot.send_message(chat_id, "Хуш омадед! Матн равон кунед.", reply_markup=ReplyKeyboardRemove())
+        return
         
-    elif data.startswith("set_color_"):
-        ud['color'] = data.replace("set_color_", "")
-        send_dashboard(chat_id, msg_id)
+    if text == BTN_ADMIN_BACK: # ХАТОГӢ ДАР ҲАМИН ҶО ИСЛОҲ ШУД
+        send_admin_menu(chat_id)
+        return
+
+    if text == BTN_BACK:
+        ud['user_state'] = None
+        send_dashboard(chat_id)
+        return
+
+    # === МЕНЮҲОИ АДМИН ===
+    if text == "🔤 Кор бо шрифтҳо" and (chat_id == ADMIN_ID or chat_id in SUB_ADMINS):
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        markup.add(KeyboardButton("➕ Иловаи Шрифт"), KeyboardButton("➖ Нест кардани Шрифт"))
+        markup.add(KeyboardButton(BTN_ADMIN_BACK))
+        bot.send_message(chat_id, "🔤 **Бахши Шрифтҳо**", parse_mode="Markdown", reply_markup=markup)
+        return
+
+    if text == "👥 Идоракунии админҳо" and chat_id == ADMIN_ID:
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        markup.add(KeyboardButton("➕ Иловаи Админ"), KeyboardButton("➖ Нест кардани Админ"))
+        markup.add(KeyboardButton(BTN_ADMIN_BACK))
+        bot.send_message(chat_id, "👥 **Бахши Админҳо**", parse_mode="Markdown", reply_markup=markup)
+        return
+
+    if text == "📢 Обунаи маҷбурӣ" and chat_id == ADMIN_ID:
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        markup.add(KeyboardButton("➕ Иловаи Канал"), KeyboardButton("➖ Нест кардани Канал"))
+        markup.add(KeyboardButton(BTN_ADMIN_BACK))
         
-    elif data.startswith("set_paper_"):
-        ud['paper'] = data.replace("set_paper_", "")
-        send_dashboard(chat_id, msg_id)
-        
-    elif data == "action_generate":
+        ch_list = "\n".join([f"• {ch}" for ch in CHANNELS.keys()]) if CHANNELS else "Ягон канал нест."
+        bot.send_message(chat_id, f"📢 **Бахши Обунаи Маҷбурӣ**\n\nКаналҳои ҳозира:\n{ch_list}", parse_mode="Markdown", reply_markup=markup)
+        return
+
+    # === АМАЛҲОИ АДМИН (Тугмаҳои дохилӣ) ===
+    if text == "➕ Иловаи Шрифт" and (chat_id == ADMIN_ID or chat_id in SUB_ADMINS):
+        ud['admin_state'] = 'wait_font_name'
+        markup = ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton(BTN_ADMIN_BACK))
+        bot.send_message(chat_id, "✍️ Номи шрифти навро нависед:", reply_markup=markup)
+        return
+
+    if text == "➖ Нест кардани Шрифт" and (chat_id == ADMIN_ID or chat_id in SUB_ADMINS):
+        ud['admin_state'] = 'wait_del_font'
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        for name in FONTS.keys(): markup.add(KeyboardButton(f"🗑 {name}"))
+        markup.add(KeyboardButton(BTN_ADMIN_BACK))
+        bot.send_message(chat_id, "Кадом шрифтро нест кардан мехоҳед?", reply_markup=markup)
+        return
+
+    if text == "➕ Иловаи Админ" and chat_id == ADMIN_ID:
+        ud['admin_state'] = 'wait_admin_id'
+        markup = ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton(BTN_ADMIN_BACK))
+        bot.send_message(chat_id, "✍️ ID-и корбарро нависед:", reply_markup=markup)
+        return
+
+    if text == "➖ Нест кардани Админ" and chat_id == ADMIN_ID:
+        ud['admin_state'] = 'wait_del_admin'
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        for s_id in SUB_ADMINS: markup.add(KeyboardButton(f"❌ {s_id}"))
+        markup.add(KeyboardButton(BTN_ADMIN_BACK))
+        bot.send_message(chat_id, "Кадом админро аз вазифа озод мекунем?", reply_markup=markup)
+        return
+
+    if text == "➕ Иловаи Канал" and chat_id == ADMIN_ID:
+        ud['admin_state'] = 'wait_channel_id'
+        markup = ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton(BTN_ADMIN_BACK))
+        bot.send_message(chat_id, "✍️ Username-и каналро нависед (масалан: `@it_tojik`).\n\n⚠️ *Огоҳӣ: Бот бояд ҳатман дар он канал Админ бошад, вагарна илова карда намешавад!*", parse_mode="Markdown", reply_markup=markup)
+        return
+
+    if text == "➖ Нест кардани Канал" and chat_id == ADMIN_ID:
+        ud['admin_state'] = 'wait_del_channel'
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        for ch in CHANNELS.keys(): markup.add(KeyboardButton(f"🗑 {ch}"))
+        markup.add(KeyboardButton(BTN_ADMIN_BACK))
+        bot.send_message(chat_id, "Кадом каналро аз рӯйхат нест кунем?", reply_markup=markup)
+        return
+
+    # === ҲОЛАТҲОИ ИНТИЗОРИИ АДМИН (States) ===
+    if ud.get('admin_state') == 'wait_font_name':
+        if text in FONTS:
+            bot.send_message(chat_id, "⚠️ Ин ном аллакай ҳаст. Дигар ном нависед:")
+            return
+        ud['temp_data'] = text
+        ud['admin_state'] = 'wait_font_file'
+        bot.send_message(chat_id, f"✅ Ном қабул шуд: **{text}**\nАкнун файли `.ttf` ё `.otf` равон кунед:", parse_mode="Markdown")
+        return
+
+    if ud.get('admin_state') == 'wait_del_font':
+        name = text.replace("🗑 ", "")
+        if name in FONTS:
+            try: os.remove(os.path.join(FONTS_DIR, FONTS[name]))
+            except: pass
+            del FONTS[name]
+            save_json(FONTS_FILE, FONTS)
+            bot.send_message(chat_id, f"✅ Шрифти '{name}' нест шуд!")
+            send_admin_menu(chat_id)
+        return
+
+    if ud.get('admin_state') == 'wait_admin_id' and chat_id == ADMIN_ID:
+        try:
+            new_id = int(text)
+            if new_id not in SUB_ADMINS and new_id != ADMIN_ID:
+                SUB_ADMINS.append(new_id)
+                save_json(ADMINS_FILE, SUB_ADMINS)
+                bot.send_message(chat_id, f"✅ Админи нав илова шуд!")
+            else:
+                bot.send_message(chat_id, "⚠️ Ин ID аллакай админ аст.")
+        except: bot.send_message(chat_id, "⚠️ Фақат рақам нависед.")
+        send_admin_menu(chat_id)
+        return
+
+    if ud.get('admin_state') == 'wait_del_admin' and chat_id == ADMIN_ID:
+        del_id = int(text.replace("❌ ", "")) if text.replace("❌ ", "").isdigit() else 0
+        if del_id in SUB_ADMINS:
+            SUB_ADMINS.remove(del_id)
+            save_json(ADMINS_FILE, SUB_ADMINS)
+            bot.send_message(chat_id, "✅ Админ нест карда шуд!")
+        send_admin_menu(chat_id)
+        return
+
+    if ud.get('admin_state') == 'wait_channel_id' and chat_id == ADMIN_ID:
+        ch_id = text
+        msg = bot.send_message(chat_id, "⏳ Санҷиши ҳуқуқҳои бот дар канал...")
+        try:
+            bot.get_chat_member(ch_id, ADMIN_ID) 
+            ud['temp_data'] = ch_id
+            ud['admin_state'] = 'wait_channel_link'
+            bot.edit_message_text(f"✅ Бот ба канал дастрасӣ дорад!\n\nАкнун **ссылкаи ин каналро** (масалан: `https://t.me/...`) равон кунед, то корбарон ба он даромада тавонанд:", chat_id, msg.message_id, parse_mode="Markdown")
+        except Exception as e:
+            bot.edit_message_text(f"❌ Хатогӣ! Бот дар канали `{ch_id}` админ нест ё номи канал нодуруст аст.\nАввал ботро дар канал админ кунед ва аз нав кӯшиш кунед.", chat_id, msg.message_id, parse_mode="Markdown")
+        return
+
+    if ud.get('admin_state') == 'wait_channel_link' and chat_id == ADMIN_ID:
+        ch_link = text
+        CHANNELS[ud['temp_data']] = ch_link
+        save_json(CHANNELS_FILE, CHANNELS)
+        bot.send_message(chat_id, f"🎉 Канали {ud['temp_data']} бо муваффақият ба обунаи маҷбурӣ илова шуд!")
+        send_admin_menu(chat_id)
+        return
+
+    if ud.get('admin_state') == 'wait_del_channel' and chat_id == ADMIN_ID:
+        ch_id = text.replace("🗑 ", "")
+        if ch_id in CHANNELS:
+            del CHANNELS[ch_id]
+            save_json(CHANNELS_FILE, CHANNELS)
+            bot.send_message(chat_id, "✅ Канал аз рӯйхат хориҷ шуд!")
+        send_admin_menu(chat_id)
+        return
+
+    # === МЕНЮИ АСОСИИ КОРБАР ===
+    if text == BTN_FORMAT:
+        ud['user_state'] = 'wait_format'
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        markup.add(KeyboardButton("📄 PDF"), KeyboardButton("🖼 Расм (PNG)"))
+        markup.add(KeyboardButton(BTN_BACK))
+        bot.send_message(chat_id, "👇 Намуди формати натиҷаро интихоб кунед:", reply_markup=markup)
+        return
+
+    if text == BTN_FONT:
+        ud['user_state'] = 'wait_font'
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        for name in FONTS.keys(): markup.add(KeyboardButton(f"🖋 {name}"))
+        markup.add(KeyboardButton(BTN_BACK))
+        bot.send_message(chat_id, "👇 Шрифти худро интихоб кунед:", reply_markup=markup)
+        return
+
+    if text == BTN_COLOR:
+        ud['user_state'] = 'wait_color'
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        for code, info in COLORS.items(): markup.add(KeyboardButton(f"🎨 {info['name']}"))
+        markup.add(KeyboardButton(BTN_BACK))
+        bot.send_message(chat_id, "👇 Ранги қаламро интихоб кунед:", reply_markup=markup)
+        return
+
+    if text == BTN_PAPER:
+        ud['user_state'] = 'wait_paper'
+        markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        for code, name in PAPERS.items(): markup.add(KeyboardButton(f"📔 {name}"))
+        markup.add(KeyboardButton(BTN_BACK))
+        bot.send_message(chat_id, "👇 Намуди варақаро интихоб кунед:", reply_markup=markup)
+        return
+
+    if text == BTN_GENERATE:
         if not FONTS:
-            bot.answer_callback_query(call.id, "⚠️ Шрифтҳо аз тарафи админ тоза карда шудаанд! Наметавонам тавлид кунам.", show_alert=True)
+            bot.send_message(chat_id, "⚠️ Шрифтҳо аз тарафи админ тоза карда шудаанд!")
             return
-            
         if not ud.get('content'):
-            bot.answer_callback_query(call.id, "⚠️ Матн ёфт нашуд! Лутфан аз нав матн фиристед.", show_alert=True)
+            bot.send_message(chat_id, "⚠️ Лутфан аввал матн ё файл равон кунед!")
             return
             
-        progress_msg = bot.edit_message_text("⚙️ Дастнавис тавлид шуда истодааст... Лутфан интизор шавед ⏳", chat_id, msg_id)
-        
+        progress_msg = bot.send_message(chat_id, "⚙️ Дастнавис тавлид шуда истодааст... Лутфан интизор шавед ⏳", reply_markup=ReplyKeyboardRemove())
         def update_progress(page):
-            try:
-                bot.edit_message_text(f"⏳ **Саҳифаи {page} омода шуд...**", chat_id, progress_msg.message_id, parse_mode="Markdown")
-            except:
-                pass 
+            try: bot.edit_message_text(f"⏳ **Саҳифаи {page} омода шуд...**", chat_id, progress_msg.message_id, parse_mode="Markdown")
+            except: pass 
 
         try:
             img_paths = generate_handwritten_images(chat_id, progress_callback=update_progress)
@@ -563,28 +570,66 @@ def handle_callbacks(call):
             
             if ud.get('format', 'pdf') == 'pdf':
                 pdf_path = create_pdf_from_images(img_paths, chat_id)
-                with open(pdf_path, 'rb') as doc:
-                    bot.send_document(chat_id, doc, caption="📄 Натиҷа дар намуди ҳуҷҷат (PDF)")
+                with open(pdf_path, 'rb') as doc: bot.send_document(chat_id, doc, caption="📄 Натиҷа (PDF)")
                 if os.path.exists(pdf_path): os.remove(pdf_path)
             else:
-                bot.send_message(chat_id, "🖼 Натиҷа дар намуди расмҳои алоҳида:")
+                bot.send_message(chat_id, "🖼 Натиҷа дар намуди расмҳо:")
                 for img_path in img_paths:
-                    with open(img_path, 'rb') as photo:
-                        bot.send_photo(chat_id, photo)
+                    with open(img_path, 'rb') as photo: bot.send_photo(chat_id, photo)
                 
-            edit_text = (
-                "🎉 Файл омода шуд!\n\n"
-                "✏️ **Тағирот ворид кардан:**\n"
-                "Агар лозим бошад, метавонед танзимотро иваз карда, дубора 'ТАВЛИД КАРДАН'-ро пахш кунед:"
-            )
-            send_dashboard(chat_id, message_id=None, custom_text=edit_text)
-            
+            send_dashboard(chat_id, "🎉 Файл омода шуд!\nАгар лозим бошад, метавонед танзимотро иваз карда, дубора '✅ ТАВЛИД КАРДАН'-ро пахш кунед:")
             for img in img_paths:
-                if os.path.exists(img):
-                    os.remove(img)
-            
+                if os.path.exists(img): os.remove(img)
         except Exception as e:
             bot.send_message(chat_id, f"❌ Хатогии дохилӣ: {e}")
+            send_dashboard(chat_id)
+        return
+
+    # === ҲОЛАТҲОИ ИНТИХОБИ КОРБАР ===
+    if ud.get('user_state') == 'wait_format':
+        if text == "📄 PDF":
+            ud['format'] = 'pdf'
+            ud['user_state'] = None
+            send_dashboard(chat_id, "✅ Формати **PDF** интихоб шуд!")
+        elif text == "🖼 Расм (PNG)":
+            ud['format'] = 'images'
+            ud['user_state'] = None
+            send_dashboard(chat_id, "✅ Формати **Расм (PNG)** интихоб шуд!")
+        else:
+            bot.send_message(chat_id, "⚠️ Лутфан аз тугмаҳои поён интихоб кунед.")
+        return
+
+    if ud.get('user_state') == 'wait_font':
+        name = text.replace("🖋 ", "")
+        if name in FONTS:
+            ud['font_name'], ud['font_file'], ud['user_state'] = name, FONTS[name], None
+            send_dashboard(chat_id, f"✅ Шрифти **{name}** интихоб шуд!")
+        else: bot.send_message(chat_id, "⚠️ Лутфан аз тугмаҳои поён интихоб кунед.")
+        return
+
+    if ud.get('user_state') == 'wait_color':
+        name = text.replace("🎨 ", "")
+        for code, info in COLORS.items():
+            if info['name'] == name:
+                ud['color'], ud['user_state'] = code, None
+                send_dashboard(chat_id, f"✅ Ранги **{info['name']}** интихоб шуд!")
+                return
+        bot.send_message(chat_id, "⚠️ Лутфан аз тугмаҳои поён интихоб кунед.")
+        return
+
+    if ud.get('user_state') == 'wait_paper':
+        name = text.replace("📔 ", "")
+        for code, p_name in PAPERS.items():
+            if p_name == name:
+                ud['paper'], ud['user_state'] = code, None
+                send_dashboard(chat_id, f"✅ Варақаи **{p_name}** интихоб шуд!")
+                return
+        bot.send_message(chat_id, "⚠️ Лутфан аз тугмаҳои поён интихоб кунед.")
+        return
+
+    # ҚАБУЛИ МАТНИ ОДДӢ
+    ud['content'] = text
+    send_dashboard(chat_id, "✅ Матн қабул шуд!\nАкнун метавонед танзимотро иваз кунед ё '✅ ТАВЛИД КАРДАН'-ро пахш намоед.")
 
 if __name__ == "__main__":
     print("🤖 Боти 'Реферат Дастнавис' фаъол шуд...")
