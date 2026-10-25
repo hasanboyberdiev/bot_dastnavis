@@ -2,6 +2,8 @@ import os
 import json
 import textwrap
 import random
+import threading
+from flask import Flask
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from PIL import Image, ImageDraw, ImageFont
@@ -10,6 +12,18 @@ import PyPDF2
 import docx
 from dotenv import load_dotenv
 import time
+
+# --- Сервери хурд барои Render ---
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return "Боти Дастнавис фаъол аст ва кор карда истодааст!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+# ---------------------------------
 
 # ==========================================
 # 1. ТАНЗИМОТИ АСОСӢ ВА РОҲҲО
@@ -370,7 +384,7 @@ def handle_text(message):
         send_dashboard(chat_id) if ud.get('content') else bot.send_message(chat_id, "Хуш омадед! Матн равон кунед.", reply_markup=ReplyKeyboardRemove())
         return
         
-    if text == BTN_ADMIN_BACK: # ХАТОГӢ ДАР ҲАМИН ҶО ИСЛОҲ ШУД
+    if text == BTN_ADMIN_BACK:
         send_admin_menu(chat_id)
         return
 
@@ -403,7 +417,7 @@ def handle_text(message):
         bot.send_message(chat_id, f"📢 **Бахши Обунаи Маҷбурӣ**\n\nКаналҳои ҳозира:\n{ch_list}", parse_mode="Markdown", reply_markup=markup)
         return
 
-    # === АМАЛҲОИ АДМИН (Тугмаҳои дохилӣ) ===
+    # === АМАЛҲОИ АДМИН ===
     if text == "➕ Иловаи Шрифт" and (chat_id == ADMIN_ID or chat_id in SUB_ADMINS):
         ud['admin_state'] = 'wait_font_name'
         markup = ReplyKeyboardMarkup(resize_keyboard=True).add(KeyboardButton(BTN_ADMIN_BACK))
@@ -446,7 +460,7 @@ def handle_text(message):
         bot.send_message(chat_id, "Кадом каналро аз рӯйхат нест кунем?", reply_markup=markup)
         return
 
-    # === ҲОЛАТҲОИ ИНТИЗОРИИ АДМИН (States) ===
+    # === ҲОЛАТҲОИ ИНТИЗОРИИ АДМИН ===
     if ud.get('admin_state') == 'wait_font_name':
         if text in FONTS:
             bot.send_message(chat_id, "⚠️ Ин ном аллакай ҳаст. Дигар ном нависед:")
@@ -632,5 +646,8 @@ def handle_text(message):
     send_dashboard(chat_id, "✅ Матн қабул шуд!\nАкнун метавонед танзимотро иваз кунед ё '✅ ТАВЛИД КАРДАН'-ро пахш намоед.")
 
 if __name__ == "__main__":
+    print("🌐 Сервери веб барои Render фаъол шуд...")
+    threading.Thread(target=run_web, daemon=True).start()
+    
     print("🤖 Боти 'Реферат Дастнавис' фаъол шуд...")
     bot.infinity_polling(timeout=10, long_polling_timeout=5)
